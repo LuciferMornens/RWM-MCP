@@ -203,27 +203,15 @@ The **bundle** usually weighs in at a few thousand tokens; heavy bodies are lazy
 
   * Create `~/.codex/config.toml`; add an `mcp_servers` entry for the RWM server. ([GitHub][2])
   * If you’re juggling providers (OpenAI, Azure, Bedrock), store profiles in TOML and let RWM stay constant across them. ([Microsoft Learn][13])
-  * To keep project memories isolated, run one server per repo with dedicated paths, e.g.
+  * To keep project memories isolated without editing `config.toml` per repo, use the dynamic launcher:
 
     ```toml
-    [mcp_servers.reddit]
+    [mcp_servers.rwm]
     command = "node"
-    args = ["/path/to/rwm-mcp/dist/index.js",
-            "--db", "/path/to/reddit-bot/rwm.db",
-            "--root", "/path/to/reddit-bot",
-            "--artifacts", "/path/to/reddit-bot/rwm_artifacts",
-            "--bundleTokens", "3000"]
-
-    [mcp_servers.facebook]
-    command = "node"
-    args = ["/path/to/rwm-mcp/dist/index.js",
-            "--db", "/path/to/facebook-bot/rwm.db",
-            "--root", "/path/to/facebook-bot",
-            "--artifacts", "/path/to/facebook-bot/rwm_artifacts",
-            "--bundleTokens", "3000"]
+    args = ["/Volumes/ExternalSSD/rmw-mcp/tools/rwm-launch.mjs"]
     ```
 
-    Each agent launch picks the right entry, so commits land in that project’s own `rwm.db` and artifact store without mixing history.
+    The launcher infers the current working directory, ensures `rwm.db` and `rwm_artifacts/` live inside that project, and points the MCP server at them. On an existing project it reuses the files; on a new project it creates them the first time you run Codex there.
 
 ---
 
