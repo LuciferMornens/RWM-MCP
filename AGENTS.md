@@ -8,24 +8,24 @@
 ## How to operate the RWM MCP (agent rules)
 
 **Always resume first**  
-Call the MCP tool **`memory.resume`** with a stable `session_id` and a modest `token_budget` (≈ 2–5k). Use the Now‑card to restate the **objective, active tasks, last decisions, and any failing tests**. Fetch bodies *only if needed*.
+Call the MCP tool **`memory_resume`** with a stable `session_id` and a modest `token_budget` (≈ 2–5k). Use the Now‑card to restate the **objective, active tasks, last decisions, and any failing tests**. Fetch bodies *only if needed*.
 
 **Work in small, verifiable steps**  
-After each meaningful change (edit, test run, migration), call **`memory.commit`** to append a micro‑frame:
-- `decisions`: brief, factual (`type`, `summary`, `evidence` IDs).  
-- `artifacts`: **diffs or file spans**, short test traces (avoid full files unless necessary).  
+After each meaningful change (edit, test run, migration), call **`memory_commit`** to append a micro‑frame:
+- `decisions`: brief, factual (`type`, `summary`, `evidence` IDs). The `type` **must** be one of `DECISION`, `ASSUMPTION`, `FIX`, `BLOCKER`, or `NOTE`. Use these labels even for code updates or test outcomes, and reference artifacts via their IDs in `evidence`.  
+- `artifacts`: **real diffs or file spans** with line content, plus short test traces. Set `kind` using the uppercase enums `DIFF`, `SNIPPET`, `CONFIG`, `FIXTURE`, `TEST_TRACE`, `LOG`, or `OTHER`. Avoid prose summaries without code.  
 - `facts`: durable project rules (build/test commands, repo conventions).
 
 **Fetch precisely, not broadly**  
-- Use **`memory.fetch(id)`** for a record by ID (artifacts return a resource link).  
-- Use **`memory.span(path, startLine, endLine)`** to read *exact* code ranges from the workspace (read‑only).  
+- Use **`memory_fetch(id)`** for a record by ID (artifacts return a resource link).  
+- Use **`memory_span(path, startLine, endLine)`** to read *exact* code ranges from the workspace (read‑only).  
 - Avoid re‑injecting large, redundant context into prompts.
 
 **Checkpoint before risk**  
-For large refactors, releases, or schema changes, create a save point with **`memory.checkpoint(label)`**.
+For large refactors, releases, or schema changes, create a save point with **`memory_checkpoint(label)`**.
 
 **If information seems missing**  
-Increase the `token_budget` on the next **`memory.resume`**, or fetch specific bodies by ID. Do **not** dump long histories; keep the bundle lean.
+Increase the `token_budget` on the next **`memory_resume`**, or fetch specific bodies by ID. Do **not** dump long histories; keep the bundle lean.
 
 **Safety & hygiene**  
 - Do **not** store secrets or credentials in memory.  
@@ -39,19 +39,19 @@ Proceed with minimal context, clearly state that RWM was not found, and request 
 
 ## MCP tools exposed by RWM (reference)
 
-- **`memory.resume(session_id, token_budget)`** → returns a compact **Now‑card** + **pointers** (IDs) for relevant tasks, decisions, failures, and facts.  
-- **`memory.commit({...})`** → appends micro‑frames: decisions, artifacts (diffs/spans/test traces), facts.  
-- **`memory.fetch(id)`** → returns a record by ID (artifacts as `artifact://sha256/<hash>` resource links).  
-- **`memory.span(path, startLine, endLine)`** → returns a read‑only file span from the current workspace.  
-- **`memory.search(session_id, query)`** → finds IDs for tasks/events/facts.  
-- **`memory.checkpoint(label)`** → creates a named restore point.
+- **`memory_resume(session_id, token_budget)`** → returns a compact **Now‑card** + **pointers** (IDs) for relevant tasks, decisions, failures, and facts.  
+- **`memory_commit({...})`** → appends micro‑frames: decisions, artifacts (diffs/spans/test traces), facts.  
+- **`memory_fetch(id)`** → returns a record by ID (artifacts as `artifact://sha256/<hash>` resource links).  
+- **`memory_span(path, startLine, endLine)`** → returns a read‑only file span from the current workspace.  
+- **`memory_search(session_id, query)`** → finds IDs for tasks/events/facts.  
+- **`memory_checkpoint(label)`** → creates a named restore point.
 
 ---
 
 ## Required programmatic checks
 
 You **must** run programmatic checks described here before finishing a task:
-1. **Memory sanity check**: After `memory.resume`, restate verbally the *objective, active tasks, last 3 decisions, and last failing test IDs*. If you cannot, fetch the missing records and try again.  
+1. **Memory sanity check**: After `memory_resume`, restate verbally the *objective, active tasks, last 3 decisions, and last failing test IDs*. If you cannot, fetch the missing records and try again.  
 2. **Repository hygiene**: Ensure `git status` is clean before finishing.  
 3. **Tests (if present)**: Detect and run the project’s test command (e.g., `pnpm test`, `npm test`, `yarn test`, or `pytest -q`). If a test suite exists, it **must** pass unless the user instructs otherwise.
 
@@ -61,7 +61,7 @@ You **must** run programmatic checks described here before finishing a task:
 
 - **`session_id`**: derive from repo and branch (e.g., `<repo>@<branch>`), optionally with date (e.g., `main@YYYY‑MM‑DD`) for long‑running streams.  
 - **Bundles**: keep under a few thousand tokens; fetch heavy bodies lazily.  
-- **Consistency**: after each critical step, `memory.commit` a micro‑frame so sessions are fully resumable later.
+- **Consistency**: after each critical step, `memory_commit` a micro‑frame so sessions are fully resumable later.
 
 ---
 
@@ -76,14 +76,14 @@ You **must** run programmatic checks described here before finishing a task:
 ## Quick examples (for the agent)
 
 - **Cold resume**  
-  1. `memory.resume({ "session_id": "<repo>@<branch>", "token_budget": 3000 })`  
-  2. If needed: `memory.fetch("D-981")` or `memory.span("gateway/rate_limit.go", 40, 112)`  
-  3. After changes/tests: `memory.commit({ ... })`
+  1. `memory_resume({ "session_id": "<repo>@<branch>", "token_budget": 3000 })`  
+  2. If needed: `memory_fetch("D-981")` or `memory_span("gateway/rate_limit.go", 40, 112)`  
+  3. After changes/tests: `memory_commit({ ... })`
 
 - **Record a failure**  
-  `memory.commit({ decisions:[{ "type":"TEST_FAIL", "summary":"login returns 200 not 429", "evidence":["T-auth-17"] }], artifacts:[{ "kind":"TEST_TRACE", "text":"expected 429, got 200" }] })`
+  `memory_commit({ decisions:[{ "type":"BLOCKER", "summary":"login returns 200 not 429", "evidence":["A-login-trace"] }], artifacts:[{ "id":"A-login-trace", "kind":"TEST_TRACE", "text":"python -m pytest\n1 failed: expected 429, got 200" }] })`
 
 - **Checkpoint before migration**  
-  `memory.checkpoint({ "session_id":"<repo>@<branch>", "label":"before-db-migration" })`
+  `memory_checkpoint({ "session_id":"<repo>@<branch>", "label":"before-db-migration" })`
 
 ---
