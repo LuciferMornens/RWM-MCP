@@ -9,7 +9,7 @@ import { sha256, nowISO, rid } from "./utils.js";
 import { safeJoin } from "./security.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, basename, join } from "node:path";
 import type { Family } from "./tokenizer.js";
 
 interface CLIArgs {
@@ -118,6 +118,13 @@ server.registerResource(
 
 /** ----------------------- Tools ----------------------- **/
 
+const artifactKinds = ["DIFF", "SNIPPET", "CONFIG", "FIXTURE", "TEST_TRACE", "LOG", "OTHER"] as const;
+const artifactKindEnum = z.enum(artifactKinds);
+const factScopes = ["repo", "service", "team", "global"] as const;
+const factScopeEnum = z.enum(factScopes);
+const taskStatuses = ["todo", "doing", "blocked", "done", "review"] as const;
+const taskStatusEnum = z.enum(taskStatuses);
+
 const memoryResumeInput = {
   session_id: z.string(),
   token_budget: z.number().int().positive().max(1_000_000).optional()
@@ -131,14 +138,15 @@ server.registerTool("memory_resume",
     inputSchema: memoryResumeInput
   },
   async ({ session_id, token_budget }) => {
+    const normalizedSessionId = await normalizeSessionId(session_id, argv.root);
     const bundle = composeBundle(db, {
-      session_id,
+      session_id: normalizedSessionId,
       tokenBudget: token_budget ?? argv.bundleTokens,
       modelFamily: argv.modelFamily
     });
     return {
       content: [{ type: "text", text: bundle.text }],
-      structuredContent: bundle.structured
+      structuredContent: { ...bundle.structured, session_id: normalizedSessionId }
     };
   }
 );
@@ -154,7 +162,7 @@ const memoryCommitInput = {
   })).optional(),
   artifacts: z.array(z.object({
     id: z.string().optional(),
-    kind: z.enum(["DIFF", "SNIPPET", "CONFIG", "FIXTURE", "TEST_TRACE", "LOG", "OTHER"]),
+    kind: artifactKindEnum,
     uri: z.string().optional(),
     text: z.string().optional(),
     path: z.string().optional(),
@@ -165,7 +173,7 @@ const memoryCommitInput = {
   facts: z.array(z.object({
     key: z.string(),
     value: z.string(),
-    scope: z.enum(["repo", "service", "team", "global"]).optional()
+    scope: factScopeEnum.optional()
   })).optional()
 } satisfies ZodRawShape;
 
@@ -177,12 +185,13 @@ server.registerTool("memory_commit",
   },
   async (args) => {
     const ts = nowISO();
+    const sessionId = await normalizeSessionId(args.session_id, argv.root);
 
     // Task upsert (simple "current task")
     if (args.task) {
       const t = {
         id: "T-" + args.task.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0,12),
-        session_id: args.session_id, parent_id: null, title: args.task,
+        session_id: sessionId, parent_id: null, title: args.task,
         status: "doing", accept_criteria: null, created_at: ts, updated_at: ts
       };
       await db.upsertTask(t);
@@ -220,7 +229,7 @@ server.registerTool("memory_commit",
     for (const d of args.decisions ?? []) {
       await db.insertEvent({
         id: d.id ?? rid("D"),
-        kind: d.type, task_id: null, session_id: args.session_id,
+        kind: d.type, task_id: null, session_id: sessionId,
         summary: d.summary, evidence_ids: JSON.stringify(d.evidence ?? artifactIds),
         ts
       });
@@ -231,12 +240,25 @@ server.registerTool("memory_commit",
       await db.upsertFact({ id: rid("F"), key: f.key, value: f.value, scope: f.scope ?? "repo" });
     }
 
-    return { content: [{ type: "text", text: "ok" }], structuredContent: { ok: true, ts, artifactIds } };
+    return { content: [{ type: "text", text: "ok" }], structuredContent: { ok: true, ts, artifactIds, session_id: sessionId } };
   }
 );
 
 const memoryFetchInput = {
   id: z.string()
+} satisfies ZodRawShape;
+
+const memoryUpdateInput = {
+  target: z.enum(["task", "artifact", "fact"] as const),
+  id: z.string(),
+  title: z.string().optional(),
+  status: taskStatusEnum.optional(),
+  accept_criteria: z.string().nullable().optional(),
+  text: z.string().optional(),
+  meta: z.any().optional(),
+  kind: artifactKindEnum.optional(),
+  value: z.string().optional(),
+  scope: factScopeEnum.optional()
 } satisfies ZodRawShape;
 
 // memory_fetch
@@ -265,6 +287,111 @@ server.registerTool("memory_fetch",
       };
     }
     return { content: [{ type: "text", text: JSON.stringify(rec, null, 2) }], structuredContent: rec };
+  }
+);
+
+// memory_update
+server.registerTool("memory_update",
+  {
+    title: "Update an existing memory record",
+    description: "Adjust task state, overwrite an artifact snippet, or revise a fact",
+    inputSchema: memoryUpdateInput
+  },
+  async (args) => {
+    const ts = nowISO();
+    const has = (key: keyof typeof args) => Object.prototype.hasOwnProperty.call(args, key);
+
+    if (args.target === "task") {
+      if (!has("title") && !has("status") && !has("accept_criteria")) {
+        return { content: [{ type: "text", text: "provide title, status, or accept_criteria to update" }], isError: true };
+      }
+      const existing = db.getTaskById(args.id);
+      if (!existing) {
+        return { content: [{ type: "text", text: `task not found: ${args.id}` }], isError: true };
+      }
+      const updated = {
+        id: existing.id,
+        session_id: existing.session_id,
+        parent_id: existing.parent_id,
+        title: args.title ?? existing.title,
+        status: args.status ?? existing.status,
+        accept_criteria: has("accept_criteria") ? args.accept_criteria ?? null : existing.accept_criteria,
+        created_at: existing.created_at,
+        updated_at: ts
+      };
+      await db.upsertTask(updated);
+      return {
+        content: [{ type: "text", text: `updated task ${args.id}` }],
+        structuredContent: updated
+      };
+    }
+
+    if (args.target === "artifact") {
+      if (!has("text") && !has("meta") && !has("kind")) {
+        return { content: [{ type: "text", text: "provide text, meta, or kind to update" }], isError: true };
+      }
+      const existing = db.getArtifactById(args.id);
+      if (!existing) {
+        return { content: [{ type: "text", text: `artifact not found: ${args.id}` }], isError: true };
+      }
+
+      const nextMeta = has("meta") ? args.meta ?? {} : (() => {
+        try {
+          return existing.meta_json ? JSON.parse(existing.meta_json) : {};
+        } catch {
+          return {};
+        }
+      })();
+
+      let sha = existing.sha256;
+      let size = existing.size;
+      let uri = existing.uri;
+
+      if (has("text")) {
+        const data = Buffer.from(args.text ?? "", "utf8");
+        sha = sha256(data);
+        size = data.length;
+        uri = `artifact://sha256/${sha}`;
+        const blobPath = resolve(argv.artifacts, sha);
+        if (!existsSync(blobPath)) {
+          await writeFile(blobPath, data);
+        }
+      }
+
+      const updatedArtifact = {
+        id: existing.id,
+        kind: args.kind ?? existing.kind,
+        uri,
+        sha256: sha,
+        size,
+        meta_json: JSON.stringify(nextMeta ?? {}),
+        created_at: existing.created_at ?? ts
+      };
+      await db.upsertArtifact(updatedArtifact);
+      return {
+        content: [{ type: "text", text: `updated artifact ${args.id}` }],
+        structuredContent: { ...updatedArtifact, meta: nextMeta }
+      };
+    }
+
+    if (!has("value") && !has("scope")) {
+      return { content: [{ type: "text", text: "provide value or scope to update" }], isError: true };
+    }
+    const existing = db.getFactById(args.id);
+    if (!existing) {
+      return { content: [{ type: "text", text: `fact not found: ${args.id}` }], isError: true };
+    }
+    const updatedFact = {
+      id: existing.id,
+      key: existing.key,
+      value: has("value") ? args.value ?? existing.value : existing.value,
+      scope: has("scope") ? args.scope ?? existing.scope : existing.scope
+    };
+    await db.upsertFact(updatedFact);
+    return {
+      content: [{ type: "text", text: `updated fact ${args.id}` }],
+      structuredContent: updatedFact
+    };
   }
 );
 
@@ -309,7 +436,8 @@ server.registerTool("memory_search",
     inputSchema: memorySearchInput
   },
   async ({ session_id, query, limit }) => {
-    const res = db.search(session_id, query, limit ?? 50);
+    const normalizedSessionId = await normalizeSessionId(session_id, argv.root);
+    const res = db.search(normalizedSessionId, query, limit ?? 50);
     return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }], structuredContent: res };
   }
 );
@@ -326,9 +454,10 @@ server.registerTool("memory_checkpoint",
     inputSchema: memoryCheckpointInput
   },
   async ({ session_id, label }) => {
+    const normalizedSessionId = await normalizeSessionId(session_id, argv.root);
     const id = rid("C");
-    await db.insertCheckpoint({ id, session_id, label, ts: nowISO(), bundle_meta: "{}" });
-    return { content: [{ type: "text", text: id }], structuredContent: { id, session_id, label } };
+    await db.insertCheckpoint({ id, session_id: normalizedSessionId, label, ts: nowISO(), bundle_meta: "{}" });
+    return { content: [{ type: "text", text: id }], structuredContent: { id, session_id: normalizedSessionId, label } };
   }
 );
 
@@ -342,4 +471,34 @@ function isProbablyText(buf: Buffer) {
   const s = buf.toString("utf8");
   const replacementCount = (s.match(/\uFFFD/g) || []).length;
   return replacementCount < 5;
+}
+function sanitizeIdPart(part: string): string {
+  return part.replace(/[^A-Za-z0-9._-]+/g, "-") || "proj";
+}
+
+async function detectGitDescriptor(root: string): Promise<string | null> {
+  try {
+    const head = await readFile(join(root, ".git/HEAD"), "utf8");
+    const refMatch = head.match(/ref: (.+)/);
+    if (refMatch) {
+      const ref = refMatch[1].trim();
+      const branch = ref.split("/").pop();
+      return branch ? sanitizeIdPart(branch) : null;
+    }
+    const hash = head.trim().slice(0, 7);
+    return hash ? sanitizeIdPart(hash) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function normalizeSessionId(raw: string, root: string): Promise<string> {
+  const trimmed = raw.trim();
+  const lowered = trimmed.toLowerCase();
+  if (trimmed && !lowered.endsWith("@unknown")) {
+    return trimmed;
+  }
+  const base = sanitizeIdPart(basename(root) || "workspace");
+  const descriptor = await detectGitDescriptor(root) ?? new Date().toISOString().split("T")[0];
+  return `${base}@${sanitizeIdPart(descriptor)}`;
 }

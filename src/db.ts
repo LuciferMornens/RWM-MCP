@@ -108,7 +108,13 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
     run(`
       insert into artifacts(id, kind, uri, sha256, size, meta_json, created_at)
       values($id,$kind,$uri,$sha256,$size,$meta_json,$created_at)
-      on conflict(id) do update set kind=excluded.kind, uri=excluded.uri, meta_json=excluded.meta_json
+      on conflict(id) do update set
+        kind=excluded.kind,
+        uri=excluded.uri,
+        sha256=excluded.sha256,
+        size=excluded.size,
+        meta_json=excluded.meta_json,
+        created_at=excluded.created_at
     `, a);
     await save();
   }

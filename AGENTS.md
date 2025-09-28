@@ -13,8 +13,11 @@ Call the MCP tool **`memory_resume`** with a stable `session_id` and a modest `t
 **Work in small, verifiable steps**  
 After each meaningful change (edit, test run, migration), call **`memory_commit`** to append a micro‑frame:
 - `decisions`: brief, factual (`type`, `summary`, `evidence` IDs). The `type` **must** be one of `DECISION`, `ASSUMPTION`, `FIX`, `BLOCKER`, or `NOTE`. Use these labels even for code updates or test outcomes, and reference artifacts via their IDs in `evidence`.  
-- `artifacts`: **real diffs or file spans** with line content, plus short test traces. Set `kind` using the uppercase enums `DIFF`, `SNIPPET`, `CONFIG`, `FIXTURE`, `TEST_TRACE`, `LOG`, or `OTHER`. Avoid prose summaries without code.  
+- `artifacts`: **real diffs or file spans** with line content, plus short test traces. Prefer staged Git diffs (`git diff --cached`) when available so the snippet matches the repo exactly; otherwise generate faithful patch text manually. Set `kind` using the uppercase enums `DIFF`, `SNIPPET`, `CONFIG`, `FIXTURE`, `TEST_TRACE`, `LOG`, or `OTHER`. Avoid prose summaries without code.  
 - `facts`: durable project rules (build/test commands, repo conventions).
+
+- When the change is complete and tests pass, stage the files and create a concise commit (`git commit -am "<summary>"`) before moving on. Keep commits scoped to one logical improvement.
+- If you must correct a stored task, artifact excerpt, or fact, call **`memory_update`** with the record ID (e.g., `T-…`, `P-…`, `F-…`) and supply only the fields that changed.
 
 **Fetch precisely, not broadly**  
 - Use **`memory_fetch(id)`** for a record by ID (artifacts return a resource link).  
@@ -41,6 +44,7 @@ Proceed with minimal context, clearly state that RWM was not found, and request 
 
 - **`memory_resume(session_id, token_budget)`** → returns a compact **Now‑card** + **pointers** (IDs) for relevant tasks, decisions, failures, and facts.  
 - **`memory_commit({...})`** → appends micro‑frames: decisions, artifacts (diffs/spans/test traces), facts.  
+- **`memory_update({...})`** → updates an existing task (title/status/acceptance), artifact snippet/metadata, or fact by ID.  
 - **`memory_fetch(id)`** → returns a record by ID (artifacts as `artifact://sha256/<hash>` resource links).  
 - **`memory_span(path, startLine, endLine)`** → returns a read‑only file span from the current workspace.  
 - **`memory_search(session_id, query)`** → finds IDs for tasks/events/facts.  
@@ -59,7 +63,7 @@ You **must** run programmatic checks described here before finishing a task:
 
 ## Session conventions
 
-- **`session_id`**: derive from repo and branch (e.g., `<repo>@<branch>`), optionally with date (e.g., `main@YYYY‑MM‑DD`) for long‑running streams.  
+- **`session_id`**: derive from repo and branch (e.g., `<repo>@<branch>`). Run `git rev-parse --abbrev-ref HEAD` to discover the branch; if Git is unavailable, fall back to `<repo>@<YYYY-MM-DD>`—never leave it as `@unknown`.  
 - **Bundles**: keep under a few thousand tokens; fetch heavy bodies lazily.  
 - **Consistency**: after each critical step, `memory_commit` a micro‑frame so sessions are fully resumable later.
 
@@ -82,6 +86,9 @@ You **must** run programmatic checks described here before finishing a task:
 
 - **Record a failure**  
   `memory_commit({ decisions:[{ "type":"BLOCKER", "summary":"login returns 200 not 429", "evidence":["A-login-trace"] }], artifacts:[{ "id":"A-login-trace", "kind":"TEST_TRACE", "text":"python -m pytest\n1 failed: expected 429, got 200" }] })`
+
+- **Tidy a task status**  
+  `memory_update({ "target":"task", "id":"T-login-cleanup", "status":"done" })`
 
 - **Checkpoint before migration**  
   `memory_checkpoint({ "session_id":"<repo>@<branch>", "label":"before-db-migration" })`

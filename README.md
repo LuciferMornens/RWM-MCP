@@ -20,6 +20,8 @@ current project automatically, and lightweight utility types.
   and returns a succinct “Now” card plus pointer IDs.
 - **Safe workspace reads**: `memory_span` only serves files inside the configured root using
   `safeJoin`.
+- **Session ID normalization**: incoming `session_id` values like `<repo>@unknown` are rewritten to
+  `<repo>@<branch-or-date>` using the workspace’s Git metadata when available.
 - **Optional tokenizer integration**: supports OpenAI and Anthropic token estimators when the
   packages are available, with graceful fallbacks.
 
@@ -82,6 +84,7 @@ identical (per-project databases in the repo root).
 | --- | --- |
 | `memory_resume` | Return a “Now” bundle (objective, active tasks, last decisions/failures) plus pointer IDs within the given token budget. |
 | `memory_commit` | Append a state frame containing decisions (`DECISION`, `ASSUMPTION`, `FIX`, `BLOCKER`, `NOTE`), artifacts (`DIFF`, `SNIPPET`, `CONFIG`, `FIXTURE`, `TEST_TRACE`, `LOG`, `OTHER`), and durable facts. |
+| `memory_update` | Update an existing task (title/status/acceptance), overwrite an artifact’s stored diff text/metadata, or revise a fact by ID. |
 | `memory_fetch` | Retrieve a record by ID. Artifacts return an `artifact://sha256/...` resource link. |
 | `memory_span` | Read a specific file range (start/end line) within the configured root. |
 | `memory_search` | Lightweight lookup for task/event/fact IDs matching a query. |
