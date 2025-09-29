@@ -138,15 +138,15 @@ server.registerTool("memory_resume",
     inputSchema: memoryResumeInput
   },
   async ({ session_id, token_budget }) => {
-    const normalizedSessionId = await normalizeSessionId(session_id, argv.root);
+    const resolvedSessionId = await resolveSessionId(session_id, argv.root, { mode: "read" });
     const bundle = composeBundle(db, {
-      session_id: normalizedSessionId,
+      session_id: resolvedSessionId,
       tokenBudget: token_budget ?? argv.bundleTokens,
       modelFamily: argv.modelFamily
     });
     return {
       content: [{ type: "text", text: bundle.text }],
-      structuredContent: { ...bundle.structured, session_id: normalizedSessionId }
+      structuredContent: { ...bundle.structured, session_id: resolvedSessionId }
     };
   }
 );
@@ -185,7 +185,7 @@ server.registerTool("memory_commit",
   },
   async (args) => {
     const ts = nowISO();
-    const sessionId = await normalizeSessionId(args.session_id, argv.root);
+    const sessionId = await resolveSessionId(args.session_id, argv.root, { mode: "write" });
 
     // Task upsert (simple "current task")
     if (args.task) {
@@ -436,8 +436,8 @@ server.registerTool("memory_search",
     inputSchema: memorySearchInput
   },
   async ({ session_id, query, limit }) => {
-    const normalizedSessionId = await normalizeSessionId(session_id, argv.root);
-    const res = db.search(normalizedSessionId, query, limit ?? 50);
+    const resolvedSessionId = await resolveSessionId(session_id, argv.root, { mode: "read" });
+    const res = db.search(resolvedSessionId, query, limit ?? 50);
     return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }], structuredContent: res };
   }
 );
@@ -454,10 +454,10 @@ server.registerTool("memory_checkpoint",
     inputSchema: memoryCheckpointInput
   },
   async ({ session_id, label }) => {
-    const normalizedSessionId = await normalizeSessionId(session_id, argv.root);
+    const resolvedSessionId = await resolveSessionId(session_id, argv.root, { mode: "write" });
     const id = rid("C");
-    await db.insertCheckpoint({ id, session_id: normalizedSessionId, label, ts: nowISO(), bundle_meta: "{}" });
-    return { content: [{ type: "text", text: id }], structuredContent: { id, session_id: normalizedSessionId, label } };
+    await db.insertCheckpoint({ id, session_id: resolvedSessionId, label, ts: nowISO(), bundle_meta: "{}" });
+    return { content: [{ type: "text", text: id }], structuredContent: { id, session_id: resolvedSessionId, label } };
   }
 );
 
@@ -476,29 +476,20 @@ function sanitizeIdPart(part: string): string {
   return part.replace(/[^A-Za-z0-9._-]+/g, "-") || "proj";
 }
 
-async function detectGitDescriptor(root: string): Promise<string | null> {
-  try {
-    const head = await readFile(join(root, ".git/HEAD"), "utf8");
-    const refMatch = head.match(/ref: (.+)/);
-    if (refMatch) {
-      const ref = refMatch[1].trim();
-      const branch = ref.split("/").pop();
-      return branch ? sanitizeIdPart(branch) : null;
-    }
-    const hash = head.trim().slice(0, 7);
-    return hash ? sanitizeIdPart(hash) : null;
-  } catch {
-    return null;
-  }
+interface ResolveSessionOptions {
+  mode?: "read" | "write";
+}
+
+async function resolveSessionId(raw: string, root: string, _options?: ResolveSessionOptions): Promise<string> {
+  const normalized = await normalizeSessionId(raw, root);
+  const base = normalized.includes("@") ? normalized.split("@")[0] : normalized;
+  await db.canonicalizeSessions(base, normalized);
+  return normalized;
 }
 
 async function normalizeSessionId(raw: string, root: string): Promise<string> {
   const trimmed = raw.trim();
-  const lowered = trimmed.toLowerCase();
-  if (trimmed && !lowered.endsWith("@unknown")) {
-    return trimmed;
-  }
-  const base = sanitizeIdPart(basename(root) || "workspace");
-  const descriptor = await detectGitDescriptor(root) ?? new Date().toISOString().split("T")[0];
-  return `${base}@${sanitizeIdPart(descriptor)}`;
+  const explicitBase = trimmed ? trimmed.split("@")[0] : "";
+  const base = sanitizeIdPart(basename(root) || explicitBase || "workspace");
+  return `${base}@main`;
 }

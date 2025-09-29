@@ -8,7 +8,7 @@
 ## How to operate the RWM MCP (agent rules)
 
 **Always resume first**  
-Call the MCP tool **`memory_resume`** with a stable `session_id` and a modest `token_budget` (≈ 2–5k). Use the Now‑card to restate the **objective, active tasks, last decisions, and any failing tests**. Fetch bodies *only if needed*.
+Call the MCP tool **`memory_resume`** with the canonical `session_id` (`<repo>@main`) and a modest `token_budget` (≈ 2–5k). The server aliases older IDs automatically, so stick to `<repo>@main` to keep history contiguous. Use the Now‑card to restate the **objective, active tasks, last decisions, and any failing tests**. Fetch bodies *only if needed*.
 
 **Work in small, verifiable steps**  
 After each meaningful change (edit, test run, migration), call **`memory_commit`** to append a micro‑frame:
@@ -63,7 +63,7 @@ You **must** run programmatic checks described here before finishing a task:
 
 ## Session conventions
 
-- **`session_id`**: derive from repo and branch (e.g., `<repo>@<branch>`). Run `git rev-parse --abbrev-ref HEAD` to discover the branch; if Git is unavailable, fall back to `<repo>@<YYYY-MM-DD>`—never leave it as `@unknown`.  
+- **`session_id`**: always use `<repo>@main`. The MCP canonicalizes legacy IDs into this namespace; providing anything else just maps back to `<repo>@main`.  
 - **Bundles**: keep under a few thousand tokens; fetch heavy bodies lazily.  
 - **Consistency**: after each critical step, `memory_commit` a micro‑frame so sessions are fully resumable later.
 
@@ -80,7 +80,7 @@ You **must** run programmatic checks described here before finishing a task:
 ## Quick examples (for the agent)
 
 - **Cold resume**  
-  1. `memory_resume({ "session_id": "<repo>@<branch>", "token_budget": 3000 })`  
+  1. `memory_resume({ "session_id": "<repo>@main", "token_budget": 5000 })`  
   2. If needed: `memory_fetch("D-981")` or `memory_span("gateway/rate_limit.go", 40, 112)`  
   3. After changes/tests: `memory_commit({ ... })`
 

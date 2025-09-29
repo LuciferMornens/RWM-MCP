@@ -25,6 +25,7 @@ export interface RWMDB {
   listRecentEvents(session_id: string, limit?: number): RWRecord[];
   listActiveTasks(session_id: string, limit?: number): RWRecord[];
   listFacts(): RWRecord[];
+  canonicalizeSessions(base: string, canonical: string): Promise<void>;
   search(session_id: string, q: string, limit?: number): {
     events: RWRecord[]; tasks: RWRecord[]; facts: RWRecord[];
   };
@@ -155,6 +156,40 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
     return all(`select * from facts`);
   }
 
+  async function canonicalizeSessions(base: string, canonical: string) {
+    if (!base) return;
+    const pattern = `${base}@%`;
+    const others = all(
+      `select distinct session_id from (
+         select session_id from events
+         union all
+         select session_id from tasks
+         union all
+         select session_id from checkpoints
+       ) where session_id like $pattern and session_id != $canonical`,
+      { pattern, canonical }
+    );
+    if (others.length === 0) return;
+
+    run(
+      `update events set session_id=$canonical
+       where session_id like $pattern and session_id != $canonical`,
+      { canonical, pattern }
+    );
+    run(
+      `update tasks set session_id=$canonical
+       where session_id like $pattern and session_id != $canonical`,
+      { canonical, pattern }
+    );
+    run(
+      `update checkpoints set session_id=$canonical
+       where session_id like $pattern and session_id != $canonical`,
+      { canonical, pattern }
+    );
+
+    await save();
+  }
+
   function searchQ(session_id: string, q: string, limit = 50) {
     const like = `%${q}%`;
     const events = all(
@@ -190,6 +225,7 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
     listRecentEvents,
     listActiveTasks,
     listFacts,
+    canonicalizeSessions,
     search: searchQ,
 
     getArtifactById,
