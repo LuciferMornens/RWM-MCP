@@ -5,12 +5,14 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { openDB } from "./db.js";
 import { composeBundle } from "./bundle.js";
-import { sha256, nowISO, rid } from "./utils.js";
-import { safeJoin } from "./security.js";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { nowISO, rid, sha256 } from "./utils.js";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve, basename, join } from "node:path";
+import { resolve, join } from "node:path";
 import type { Family } from "./tokenizer.js";
+import { canonicalizeAlias, normalizeSessionId } from "./session.js";
+import { handleMemoryCommit } from "./stateframe.js";
+import { safeJoin } from "./security.js";
 
 interface CLIArgs {
   db: string;
@@ -186,61 +188,13 @@ server.registerTool("memory_commit",
   async (args) => {
     const ts = nowISO();
     const sessionId = await resolveSessionId(args.session_id, argv.root, { mode: "write" });
+    const outcome = await handleMemoryCommit(
+      { db, root: argv.root, artifactsDir: argv.artifacts },
+      { ...args, session_id: sessionId },
+      ts
+    );
 
-    // Task upsert (simple "current task")
-    if (args.task) {
-      const t = {
-        id: "T-" + args.task.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0,12),
-        session_id: sessionId, parent_id: null, title: args.task,
-        status: "doing", accept_criteria: null, created_at: ts, updated_at: ts
-      };
-      await db.upsertTask(t);
-    }
-
-    // Artifacts: write text or spans into content-addressed store
-    const artifactIds: string[] = [];
-    for (const a of args.artifacts ?? []) {
-      let text = a.text;
-      if (!text && a.path) {
-        const full = safeJoin(argv.root, a.path);
-        const fileTxt = (await readFile(full, "utf8")).split("\n");
-        const start = a.startLine ?? 1;
-        const end   = a.endLine ?? fileTxt.length;
-        text = fileTxt.slice(start-1, end).join("\n");
-      }
-      if (!text && a.uri) {
-        text = "";
-      }
-      const data = Buffer.from(text ?? "", "utf8");
-      const hash = sha256(data);
-      const outPath = resolve(argv.artifacts, hash);
-      if (!existsSync(outPath)) {
-        await writeFile(outPath, data);
-      }
-      const id = a.id ?? ("P-" + hash.slice(0, 8));
-      await db.upsertArtifact({
-        id, kind: a.kind, uri: `artifact://sha256/${hash}`,
-        sha256: hash, size: data.length, meta_json: JSON.stringify(a.meta ?? {}), created_at: ts
-      });
-      artifactIds.push(id);
-    }
-
-    // Decisions/events
-    for (const d of args.decisions ?? []) {
-      await db.insertEvent({
-        id: d.id ?? rid("D"),
-        kind: d.type, task_id: null, session_id: sessionId,
-        summary: d.summary, evidence_ids: JSON.stringify(d.evidence ?? artifactIds),
-        ts
-      });
-    }
-
-    // Facts
-    for (const f of args.facts ?? []) {
-      await db.upsertFact({ id: rid("F"), key: f.key, value: f.value, scope: f.scope ?? "repo" });
-    }
-
-    return { content: [{ type: "text", text: "ok" }], structuredContent: { ok: true, ts, artifactIds, session_id: sessionId } };
+    return { content: [{ type: "text", text: "ok" }], structuredContent: { ok: true, ts, artifactIds: outcome.artifactIds, session_id: sessionId } };
   }
 );
 
@@ -472,9 +426,6 @@ function isProbablyText(buf: Buffer) {
   const replacementCount = (s.match(/\uFFFD/g) || []).length;
   return replacementCount < 5;
 }
-function sanitizeIdPart(part: string): string {
-  return part.replace(/[^A-Za-z0-9._-]+/g, "-") || "proj";
-}
 
 interface ResolveSessionOptions {
   mode?: "read" | "write";
@@ -482,14 +433,7 @@ interface ResolveSessionOptions {
 
 async function resolveSessionId(raw: string, root: string, _options?: ResolveSessionOptions): Promise<string> {
   const normalized = await normalizeSessionId(raw, root);
-  const base = normalized.includes("@") ? normalized.split("@")[0] : normalized;
-  await db.canonicalizeSessions(base, normalized);
+  const alias = canonicalizeAlias(raw, root);
+  await db.canonicalizeSessionAlias(alias, normalized);
   return normalized;
-}
-
-async function normalizeSessionId(raw: string, root: string): Promise<string> {
-  const trimmed = raw.trim();
-  const explicitBase = trimmed ? trimmed.split("@")[0] : "";
-  const base = sanitizeIdPart(basename(root) || explicitBase || "workspace");
-  return `${base}@main`;
 }
