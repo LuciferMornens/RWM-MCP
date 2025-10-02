@@ -108,13 +108,17 @@ export function composeBundle(db: RWMDB, opts: BundleOpts) {
 POINTERS:
 ${picked.map(p => `• ${p.type} ${p.id}`).join("\n")}`;
 
+  const metrics = picked.map((p) => ({ pointer_id: p.id, token_cost: p.tokenCost, type: p.type }));
+
   return {
     text: summaryText,
     structured: {
       now,
       pointers: picked.map(p => ({ id: p.id, type: p.type })),
       token_estimate: used,
-      budget: tokenBudget
-    }
+      budget: tokenBudget,
+      metrics
+    },
+    metrics
   };
 }

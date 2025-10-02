@@ -20,11 +20,14 @@ export interface RWMDB {
   upsertArtifact(a: any): Promise<void>;
   upsertFact(f: any): Promise<void>;
   insertCheckpoint(c: any): Promise<void>;
+  upsertTokenMetric(m: any): Promise<void>;
 
   // Queries for bundle & tools
   listRecentEvents(session_id: string, limit?: number): RWRecord[];
   listActiveTasks(session_id: string, limit?: number): RWRecord[];
   listFacts(): RWRecord[];
+  listTokenMetrics(session_id: string, limit?: number): RWRecord[];
+  listArtifactHashes(): string[];
   canonicalizeSessionAlias(oldId: string, canonical: string): Promise<void>;
   search(session_id: string, q: string, limit?: number): {
     events: RWRecord[]; tasks: RWRecord[]; facts: RWRecord[];
@@ -51,6 +54,7 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
     : new SQL.Database();
 
   initSchema(db);
+  enforceFactUniqueness(db);
 
   async function save() {
     const data = db.export();
@@ -124,7 +128,10 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
     run(`
       insert into facts(id, key, value, scope)
       values($id,$key,$value,$scope)
-      on conflict(id) do update set value=excluded.value, scope=excluded.scope
+      on conflict(key, scope) do update set
+        value=excluded.value,
+        id=excluded.id,
+        scope=excluded.scope
     `, f);
     await save();
   }
@@ -134,6 +141,14 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
       insert into checkpoints(id, session_id, label, ts, bundle_meta)
       values($id,$session_id,$label,$ts,$bundle_meta)
     `, c);
+    await save();
+  }
+
+  async function upsertTokenMetric(m: any) {
+    run(`
+      insert into token_metrics(id, session_id, pointer_id, token_cost, budget, created_at)
+      values($id,$session_id,$pointer_id,$token_cost,$budget,$created_at)
+    `, m);
     await save();
   }
 
@@ -154,6 +169,17 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
 
   function listFacts() {
     return all(`select * from facts`);
+  }
+
+  function listTokenMetrics(session_id: string, limit = 200) {
+    return all(
+      `select * from token_metrics where session_id=$session_id order by created_at desc limit $limit`,
+      { session_id, limit }
+    );
+  }
+
+  function listArtifactHashes() {
+    return all(`select sha256 from artifacts`).map((row) => row.sha256 as string);
   }
 
   async function canonicalizeSessionAlias(oldId: string, canonical: string) {
@@ -206,10 +232,13 @@ export async function openDB({ dbPath }: DBDeps): Promise<RWMDB> {
     upsertArtifact,
     upsertFact,
     insertCheckpoint,
+    upsertTokenMetric,
 
     listRecentEvents,
     listActiveTasks,
     listFacts,
+    listTokenMetrics,
+    listArtifactHashes,
     canonicalizeSessionAlias,
     search: searchQ,
 
@@ -251,8 +280,28 @@ function initSchema(db: SQLDatabase) {
       id text primary key, session_id text not null, label text not null, ts text not null, bundle_meta text
     );
 
+    create table if not exists token_metrics(
+      id text primary key,
+      session_id text not null,
+      pointer_id text not null,
+      token_cost integer not null,
+      budget integer not null,
+      created_at text not null
+    );
+
     create index if not exists idx_events_session_ts on events(session_id, ts desc);
     create index if not exists idx_tasks_session on tasks(session_id);
     create index if not exists idx_artifacts_sha on artifacts(sha256);
+    create index if not exists idx_token_metrics_session on token_metrics(session_id, created_at desc);
   `);
+}
+
+function enforceFactUniqueness(db: SQLDatabase) {
+  db.exec(`
+    delete from facts
+      where rowid not in (
+        select min(rowid) from facts group by key, scope
+      );
+  `);
+  db.exec(`create unique index if not exists idx_facts_key_scope on facts(key, scope);`);
 }

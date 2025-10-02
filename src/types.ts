@@ -29,7 +29,7 @@ export interface Checkpoint { id: ID; session_id: string; label: string; ts: str
 export interface StateFrameInput {
   session_id: string;
   task?: string;
-  decisions?: { id?: ID; type: "DECISION" | "ASSUMPTION" | "FIX" | "BLOCKER" | "NOTE"; summary: string; evidence?: ID[] }[];
+  decisions?: { id?: ID; type: "DECISION" | "ASSUMPTION" | "FIX" | "BLOCKER" | "NOTE"; summary: string; evidence?: ID[]; task_id?: ID }[];
   artifacts?: { id?: ID; kind: ArtifactMeta["kind"]; uri?: string; text?: string; path?: string; startLine?: number; endLine?: number; meta?: any }[];
   next_actions?: string[];
   facts?: { key: string; value: string; scope?: Fact["scope"] }[];

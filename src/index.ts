@@ -12,6 +12,7 @@ import { resolve, join } from "node:path";
 import type { Family } from "./tokenizer.js";
 import { canonicalizeAlias, normalizeSessionId } from "./session.js";
 import { handleMemoryCommit } from "./stateframe.js";
+import { buildCheckpointMeta } from "./checkpoint.js";
 import { safeJoin } from "./security.js";
 
 interface CLIArgs {
@@ -146,6 +147,17 @@ server.registerTool("memory_resume",
       tokenBudget: token_budget ?? argv.bundleTokens,
       modelFamily: argv.modelFamily
     });
+    const metricTs = nowISO();
+    for (const metric of bundle.metrics ?? []) {
+      await db.upsertTokenMetric({
+        id: rid("M"),
+        session_id: resolvedSessionId,
+        pointer_id: metric.pointer_id,
+        token_cost: metric.token_cost,
+        budget: bundle.structured.budget,
+        created_at: metricTs
+      });
+    }
     return {
       content: [{ type: "text", text: bundle.text }],
       structuredContent: { ...bundle.structured, session_id: resolvedSessionId }
@@ -160,6 +172,7 @@ const memoryCommitInput = {
     id: z.string().optional(),
     type: z.enum(["DECISION", "ASSUMPTION", "FIX", "BLOCKER", "NOTE"]),
     summary: z.string(),
+    task_id: z.string().optional(),
     evidence: z.array(z.string()).optional()
   })).optional(),
   artifacts: z.array(z.object({
@@ -410,7 +423,8 @@ server.registerTool("memory_checkpoint",
   async ({ session_id, label }) => {
     const resolvedSessionId = await resolveSessionId(session_id, argv.root, { mode: "write" });
     const id = rid("C");
-    await db.insertCheckpoint({ id, session_id: resolvedSessionId, label, ts: nowISO(), bundle_meta: "{}" });
+    const meta = buildCheckpointMeta(db, resolvedSessionId);
+    await db.insertCheckpoint({ id, session_id: resolvedSessionId, label, ts: nowISO(), bundle_meta: JSON.stringify(meta) });
     return { content: [{ type: "text", text: id }], structuredContent: { id, session_id: resolvedSessionId, label } };
   }
 );
